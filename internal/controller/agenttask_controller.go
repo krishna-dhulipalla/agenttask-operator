@@ -20,6 +20,7 @@ import (
 	"context"
 
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -43,6 +44,7 @@ type AgentTaskReconciler struct {
 // +kubebuilder:rbac:groups=execution.agenttask.io,resources=agenttasks/finalizers,verbs=update
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -74,6 +76,18 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{Requeue: true}, nil
 	}
 
+	// 0. Handle Cancellation
+	if agentTask.Spec.Canceled {
+		// If already terminal, ignore
+		if agentTask.Status.Phase == executionv1alpha1.AgentTaskPhaseSucceeded ||
+			agentTask.Status.Phase == executionv1alpha1.AgentTaskPhaseFailed ||
+			agentTask.Status.Phase == executionv1alpha1.AgentTaskPhaseCanceled {
+			return ctrl.Result{}, nil
+		}
+		// Otherwise, transition to Canceled and clean up
+		return r.reconcileCanceled(ctx, agentTask)
+	}
+
 	// State Machine
 	switch agentTask.Status.Phase {
 	case executionv1alpha1.AgentTaskPhasePending:
@@ -90,7 +104,7 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		if err := r.reconcileRunning(ctx, agentTask); err != nil {
 			return ctrl.Result{}, err
 		}
-	case executionv1alpha1.AgentTaskPhaseSucceeded, executionv1alpha1.AgentTaskPhaseFailed:
+	case executionv1alpha1.AgentTaskPhaseSucceeded, executionv1alpha1.AgentTaskPhaseFailed, executionv1alpha1.AgentTaskPhaseCanceled:
 		// Terminal states, no further action needed
 		return ctrl.Result{}, nil
 	}
@@ -108,12 +122,17 @@ func (r *AgentTaskReconciler) reconcilePending(ctx context.Context, task *execut
 		return err
 	}
 
-	// 2. Ensure Pod
+	// 2. Ensure NetworkPolicy (US-2.3)
+	if err := r.ensureNetworkPolicy(ctx, task); err != nil {
+		return err
+	}
+
+	// 3. Ensure Pod
 	if err := r.ensurePod(ctx, task, cmName); err != nil {
 		return err
 	}
 
-	// 3. Update Status
+	// 4. Update Status
 	task.Status.Phase = executionv1alpha1.AgentTaskPhaseScheduled
 	return r.Status().Update(ctx, task)
 }
@@ -153,6 +172,42 @@ func (r *AgentTaskReconciler) ensureCodeConfigMap(ctx context.Context, task *exe
 	return "", nil
 }
 
+func (r *AgentTaskReconciler) ensureNetworkPolicy(ctx context.Context, task *executionv1alpha1.AgentTask) error {
+	npName := task.Name + "-netpol"
+	np := &networkingv1.NetworkPolicy{}
+	err := r.Get(ctx, types.NamespacedName{Name: npName, Namespace: task.Namespace}, np)
+	if err != nil && errors.IsNotFound(err) {
+		np = &networkingv1.NetworkPolicy{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      npName,
+				Namespace: task.Namespace,
+				OwnerReferences: []metav1.OwnerReference{
+					*metav1.NewControllerRef(task, executionv1alpha1.GroupVersion.WithKind("AgentTask")),
+				},
+			},
+			Spec: networkingv1.NetworkPolicySpec{
+				PodSelector: metav1.LabelSelector{
+					MatchLabels: map[string]string{
+						"agenttask.io/task": task.Name,
+					},
+				},
+				PolicyTypes: []networkingv1.PolicyType{
+					networkingv1.PolicyTypeIngress,
+					networkingv1.PolicyTypeEgress,
+				},
+				Ingress: []networkingv1.NetworkPolicyIngressRule{}, // Deny all ingress
+				Egress:  []networkingv1.NetworkPolicyEgressRule{},  // Deny all egress
+			},
+		}
+		if err := r.Create(ctx, np); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (r *AgentTaskReconciler) ensurePod(ctx context.Context, task *executionv1alpha1.AgentTask, cmName string) error {
 	podName := task.Name + "-pod"
 	pod := &corev1.Pod{}
@@ -169,6 +224,9 @@ func (r *AgentTaskReconciler) ensurePod(ctx context.Context, task *executionv1al
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      podName,
 				Namespace: task.Namespace,
+				Labels: map[string]string{
+					"agenttask.io/task": task.Name,
+				},
 				OwnerReferences: []metav1.OwnerReference{
 					*metav1.NewControllerRef(task, executionv1alpha1.GroupVersion.WithKind("AgentTask")),
 				},
@@ -334,6 +392,40 @@ func (r *AgentTaskReconciler) updatePhaseFailure(ctx context.Context, task *exec
 	now := metav1.Now()
 	task.Status.CompletionTime = &now
 	return r.Status().Update(ctx, task)
+}
+
+func (r *AgentTaskReconciler) reconcileCanceled(ctx context.Context, task *executionv1alpha1.AgentTask) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+	log.Info("Canceling AgentTask", "name", task.Name)
+
+	// Attempt to delete the Pod if it exists
+	if task.Status.PodRef.Name != "" {
+		pod := &corev1.Pod{}
+		err := r.Get(ctx, types.NamespacedName{Name: task.Status.PodRef.Name, Namespace: task.Status.PodRef.Namespace}, pod)
+		if err == nil {
+			// Pod exists, delete it
+			if err := r.Delete(ctx, pod); err != nil {
+				if !errors.IsNotFound(err) {
+					log.Error(err, "Failed to delete pod for canceled task")
+					return ctrl.Result{}, err
+				}
+			}
+		} else if !errors.IsNotFound(err) {
+			return ctrl.Result{}, err
+		}
+	}
+
+	// Update Status
+	task.Status.Phase = executionv1alpha1.AgentTaskPhaseCanceled
+	now := metav1.Now()
+	task.Status.CompletionTime = &now
+	task.Status.Message = "Task was canceled by user request"
+	task.Status.Reason = "Canceled"
+
+	if err := r.Status().Update(ctx, task); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{}, nil
 }
 
 func (r *AgentTaskReconciler) resolveImage(profile string) string {

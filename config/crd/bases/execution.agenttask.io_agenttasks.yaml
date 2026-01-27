@@ -43,6 +43,9 @@ spec:
                 description: Backend selects the execution backend ("auto", "pod",
                   "sandbox").
                 type: string
+              canceled:
+                description: Canceled indicates if the task should be cancelled.
+                type: boolean
               code:
                 description: Code defines the source code to execute.
                 properties:

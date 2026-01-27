@@ -49,6 +49,10 @@ type AgentTaskSpec struct {
 	// Tenant identifies the user or group for multi-tenancy.
 	// +optional
 	Tenant string `json:"tenant,omitempty"`
+
+	// Canceled indicates if the task should be cancelled.
+	// +optional
+	Canceled bool `json:"canceled,omitempty"`
 }
 
 // CodeSource defines where to find the code.
