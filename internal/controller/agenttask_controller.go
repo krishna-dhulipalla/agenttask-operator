@@ -19,8 +19,12 @@ package controller
 import (
 	"context"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -37,6 +41,9 @@ type AgentTaskReconciler struct {
 // +kubebuilder:rbac:groups=execution.agenttask.io,resources=agenttasks,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=execution.agenttask.io,resources=agenttasks/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=execution.agenttask.io,resources=agenttasks/finalizers,verbs=update
+// +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
+
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -71,10 +78,11 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// State Machine
 	switch agentTask.Status.Phase {
 	case executionv1alpha1.AgentTaskPhasePending:
-		// TODO: Implement scheduling logic (US-2.1)
-		// For now, we transition to Scheduled to simulate progress if US-2.1 is next.
-		// In a real scenario, we would wait for the Pod creation.
-		logf.Log.Info("AgentTask is Pending", "name", agentTask.Name)
+		if err := r.reconcilePending(ctx, agentTask); err != nil {
+			return ctrl.Result{}, err
+		}
+		// Requeue to proceed to next state immediately
+		return ctrl.Result{Requeue: true}, nil
 	case executionv1alpha1.AgentTaskPhaseScheduled:
 		// TODO: Watch Pod logic
 	case executionv1alpha1.AgentTaskPhaseRunning:
@@ -82,6 +90,133 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func (r *AgentTaskReconciler) reconcilePending(ctx context.Context, task *executionv1alpha1.AgentTask) error {
+	log := logf.FromContext(ctx)
+	log.Info("Reconciling Pending AgentTask", "name", task.Name)
+
+	// 1. Ensure Code ConfigMap
+	cmName, err := r.ensureCodeConfigMap(ctx, task)
+	if err != nil {
+		return err
+	}
+
+	// 2. Ensure Pod
+	if err := r.ensurePod(ctx, task, cmName); err != nil {
+		return err
+	}
+
+	// 3. Update Status
+	task.Status.Phase = executionv1alpha1.AgentTaskPhaseScheduled
+	return r.Status().Update(ctx, task)
+}
+
+func (r *AgentTaskReconciler) ensureCodeConfigMap(ctx context.Context, task *executionv1alpha1.AgentTask) (string, error) {
+	// If configMapRef is provided, verify it exists (optional but good practice)
+	if task.Spec.Code.ConfigMapRef != nil {
+		return task.Spec.Code.ConfigMapRef.Name, nil
+	}
+
+	// If source is provided, create a ConfigMap
+	if task.Spec.Code.Source != "" {
+		cmName := task.Name + "-code"
+		cm := &corev1.ConfigMap{}
+		err := r.Get(ctx, types.NamespacedName{Name: cmName, Namespace: task.Namespace}, cm)
+		if err != nil && errors.IsNotFound(err) {
+			cm = &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      cmName,
+					Namespace: task.Namespace,
+					OwnerReferences: []metav1.OwnerReference{
+						*metav1.NewControllerRef(task, executionv1alpha1.GroupVersion.WithKind("AgentTask")),
+					},
+				},
+				Data: map[string]string{
+					"entrypoint.py": task.Spec.Code.Source, // Assuming Python for now per simple contract
+				},
+			}
+			if err := r.Create(ctx, cm); err != nil {
+				return "", err
+			}
+		} else if err != nil {
+			return "", err
+		}
+		return cmName, nil
+	}
+	return "", nil
+}
+
+func (r *AgentTaskReconciler) ensurePod(ctx context.Context, task *executionv1alpha1.AgentTask, cmName string) error {
+	podName := task.Name + "-pod"
+	pod := &corev1.Pod{}
+	err := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: task.Namespace}, pod)
+	if err != nil && errors.IsNotFound(err) {
+		image := r.resolveImage(task.Spec.RuntimeProfile)
+		
+		pod = &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      podName,
+				Namespace: task.Namespace,
+				OwnerReferences: []metav1.OwnerReference{
+					*metav1.NewControllerRef(task, executionv1alpha1.GroupVersion.WithKind("AgentTask")),
+				},
+			},
+			Spec: corev1.PodSpec{
+				RestartPolicy: corev1.RestartPolicyNever,
+				Containers: []corev1.Container{
+					{
+						Name:    "task",
+						Image:   image,
+						Command: []string{"python", "/workspace/entrypoint.py"},
+						VolumeMounts: []corev1.VolumeMount{
+							{
+								Name:      "code",
+								MountPath: "/workspace",
+								ReadOnly:  true,
+							},
+						},
+						Resources: task.Spec.Resources,
+					},
+				},
+				Volumes: []corev1.Volume{
+					{
+						Name: "code",
+						VolumeSource: corev1.VolumeSource{
+							ConfigMap: &corev1.ConfigMapVolumeSource{
+								LocalObjectReference: corev1.LocalObjectReference{Name: cmName},
+							},
+						},
+					},
+				},
+			},
+		}
+		// TODO: Add SecurityContext (US-2.2)
+
+		if err := r.Create(ctx, pod); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+	
+	task.Status.PodRef = corev1.ObjectReference{
+		Kind:      "Pod",
+		Name:      pod.Name,
+		Namespace: pod.Namespace,
+	}
+	
+	return nil
+}
+
+func (r *AgentTaskReconciler) resolveImage(profile string) string {
+	// Simple mapping for MVP
+	switch profile {
+	case "python3.11", "python3.10":
+		return "python:3.11-slim"
+	default:
+		return "python:3.11-slim"
+	}
 }
 
 // SetupWithManager sets up the controller with the Manager.
