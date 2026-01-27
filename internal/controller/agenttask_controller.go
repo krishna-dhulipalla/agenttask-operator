@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -49,7 +50,36 @@ type AgentTaskReconciler struct {
 func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = logf.FromContext(ctx)
 
-	// TODO(user): your logic here
+	// Fetch the AgentTask instance
+	agentTask := &executionv1alpha1.AgentTask{}
+	if err := r.Get(ctx, req.NamespacedName, agentTask); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// Initialize Phase if empty
+	if agentTask.Status.Phase == "" {
+		agentTask.Status.Phase = executionv1alpha1.AgentTaskPhasePending
+		now := metav1.Now()
+		agentTask.Status.StartTime = &now
+		if err := r.Status().Update(ctx, agentTask); err != nil {
+			return ctrl.Result{}, err
+		}
+		// Return to trigger immediate re-reconcile
+		return ctrl.Result{Requeue: true}, nil
+	}
+
+	// State Machine
+	switch agentTask.Status.Phase {
+	case executionv1alpha1.AgentTaskPhasePending:
+		// TODO: Implement scheduling logic (US-2.1)
+		// For now, we transition to Scheduled to simulate progress if US-2.1 is next.
+		// In a real scenario, we would wait for the Pod creation.
+		logf.Log.Info("AgentTask is Pending", "name", agentTask.Name)
+	case executionv1alpha1.AgentTaskPhaseScheduled:
+		// TODO: Watch Pod logic
+	case executionv1alpha1.AgentTaskPhaseRunning:
+		// TODO: Monitor Pod logic
+	}
 
 	return ctrl.Result{}, nil
 }

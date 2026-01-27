@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -25,37 +26,100 @@ import (
 
 // AgentTaskSpec defines the desired state of AgentTask
 type AgentTaskSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
+	// RuntimeProfile selects the execution environment (e.g., "python3.11").
+	// +required
+	RuntimeProfile string `json:"runtimeProfile"`
 
-	// foo is an example field of AgentTask. Edit agenttask_types.go to remove/update
+	// Code defines the source code to execute.
+	// +required
+	Code CodeSource `json:"code"`
+
+	// Resources allows specifying CPU/Memory requirements.
 	// +optional
-	Foo *string `json:"foo,omitempty"`
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// TimeoutSeconds defines the maximum execution time.
+	// +optional
+	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"`
+
+	// Backend selects the execution backend ("auto", "pod", "sandbox").
+	// +optional
+	Backend string `json:"backend,omitempty"`
+
+	// Tenant identifies the user or group for multi-tenancy.
+	// +optional
+	Tenant string `json:"tenant,omitempty"`
+}
+
+// CodeSource defines where to find the code.
+type CodeSource struct {
+	// Source is the inline code content.
+	// +optional
+	Source string `json:"source,omitempty"`
+
+	// ConfigMapRef references a ConfigMap containing the code.
+	// +optional
+	ConfigMapRef *corev1.ConfigMapKeySelector `json:"configMapRef,omitempty"`
 }
 
 // AgentTaskStatus defines the observed state of AgentTask.
 type AgentTaskStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// Phase represents the current stage of the task lifecycle.
+	// +optional
+	Phase AgentTaskPhase `json:"phase,omitempty"`
 
-	// For Kubernetes API conventions, see:
-	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
+	// PodRef references the created Pod or Sandbox.
+	// +optional
+	PodRef corev1.ObjectReference `json:"podRef,omitempty"`
 
-	// conditions represent the current state of the AgentTask resource.
-	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
-	//
-	// Standard condition types include:
-	// - "Available": the resource is fully functional
-	// - "Progressing": the resource is being created or updated
-	// - "Degraded": the resource failed to reach or maintain its desired state
-	//
-	// The status of each condition is one of True, False, or Unknown.
-	// +listType=map
-	// +listMapKey=type
+	// Result stores the reference to the execution result.
+	// +optional
+	Result *ExecutionResult `json:"result,omitempty"`
+
+	// Conditions store detailed status conditions.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// ExitCode is the container exit code.
+	// +optional
+	ExitCode int32 `json:"exitCode,omitempty"`
+
+	// Reason facilitates machine-readable failure analysis.
+	// +optional
+	Reason string `json:"reason,omitempty"`
+
+	// Message provides a human-readable detailed status message.
+	// +optional
+	Message string `json:"message,omitempty"`
+
+	// StartTime is when the task was accepted.
+	// +optional
+	StartTime *metav1.Time `json:"startTime,omitempty"`
+
+	// CompletionTime is when the task reached a terminal state.
+	// +optional
+	CompletionTime *metav1.Time `json:"completionTime,omitempty"`
+}
+
+// AgentTaskPhase describes the lifecycle phase.
+// +kubebuilder:validation:Enum=Pending;Scheduled;Running;Succeeded;Failed;Timeout;Canceled
+type AgentTaskPhase string
+
+const (
+	AgentTaskPhasePending   AgentTaskPhase = "Pending"
+	AgentTaskPhaseScheduled AgentTaskPhase = "Scheduled"
+	AgentTaskPhaseRunning   AgentTaskPhase = "Running"
+	AgentTaskPhaseSucceeded AgentTaskPhase = "Succeeded"
+	AgentTaskPhaseFailed    AgentTaskPhase = "Failed"
+	AgentTaskPhaseTimeout   AgentTaskPhase = "Timeout"
+	AgentTaskPhaseCanceled  AgentTaskPhase = "Canceled"
+)
+
+// ExecutionResult holds the structured result or reference.
+type ExecutionResult struct {
+	// JSON is the raw JSON result (if small).
+	// +optional
+	JSON string `json:"json,omitempty"`
 }
 
 // +kubebuilder:object:root=true
