@@ -44,7 +44,6 @@ type AgentTaskReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 
-
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 // TODO(user): Modify the Reconcile function to compare the state specified by
@@ -84,9 +83,16 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		// Requeue to proceed to next state immediately
 		return ctrl.Result{Requeue: true}, nil
 	case executionv1alpha1.AgentTaskPhaseScheduled:
-		// TODO: Watch Pod logic
+		if err := r.reconcileScheduled(ctx, agentTask); err != nil {
+			return ctrl.Result{}, err
+		}
 	case executionv1alpha1.AgentTaskPhaseRunning:
-		// TODO: Monitor Pod logic
+		if err := r.reconcileRunning(ctx, agentTask); err != nil {
+			return ctrl.Result{}, err
+		}
+	case executionv1alpha1.AgentTaskPhaseSucceeded, executionv1alpha1.AgentTaskPhaseFailed:
+		// Terminal states, no further action needed
+		return ctrl.Result{}, nil
 	}
 
 	return ctrl.Result{}, nil
@@ -153,7 +159,7 @@ func (r *AgentTaskReconciler) ensurePod(ctx context.Context, task *executionv1al
 	err := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: task.Namespace}, pod)
 	if err != nil && errors.IsNotFound(err) {
 		image := r.resolveImage(task.Spec.RuntimeProfile)
-		
+
 		pod = &corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      podName,
@@ -199,14 +205,108 @@ func (r *AgentTaskReconciler) ensurePod(ctx context.Context, task *executionv1al
 	} else if err != nil {
 		return err
 	}
-	
+
 	task.Status.PodRef = corev1.ObjectReference{
 		Kind:      "Pod",
 		Name:      pod.Name,
 		Namespace: pod.Namespace,
 	}
-	
+
 	return nil
+}
+
+func (r *AgentTaskReconciler) reconcileScheduled(ctx context.Context, task *executionv1alpha1.AgentTask) error {
+	log := logf.FromContext(ctx)
+
+	// Fetch the Pod
+	pod := &corev1.Pod{}
+	err := r.Get(ctx, types.NamespacedName{Name: task.Status.PodRef.Name, Namespace: task.Status.PodRef.Namespace}, pod)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			// Pod is missing? Transition to Failed
+			log.Error(err, "Pod missing for Scheduled task", "pod", task.Status.PodRef.Name)
+			return r.updatePhaseFailure(ctx, task, "PodMissing", "The execution pod was deleted unexpectedly.")
+		}
+		return err
+	}
+
+	// Check Pod Status
+	switch pod.Status.Phase {
+	case corev1.PodPending:
+		// Still waiting
+		return nil
+	case corev1.PodRunning:
+		task.Status.Phase = executionv1alpha1.AgentTaskPhaseRunning
+		return r.Status().Update(ctx, task)
+	case corev1.PodSucceeded:
+		task.Status.Phase = executionv1alpha1.AgentTaskPhaseSucceeded
+		now := metav1.Now()
+		task.Status.CompletionTime = &now
+		return r.Status().Update(ctx, task)
+	case corev1.PodFailed:
+		return r.handlePodFailure(ctx, task, pod)
+	}
+
+	return nil
+}
+
+func (r *AgentTaskReconciler) reconcileRunning(ctx context.Context, task *executionv1alpha1.AgentTask) error {
+	// Fetch the Pod
+	pod := &corev1.Pod{}
+	err := r.Get(ctx, types.NamespacedName{Name: task.Status.PodRef.Name, Namespace: task.Status.PodRef.Namespace}, pod)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return r.updatePhaseFailure(ctx, task, "PodMissing", "The execution pod was deleted while running.")
+		}
+		return err
+	}
+
+	switch pod.Status.Phase {
+	case corev1.PodRunning:
+		// Still running, check timeout logic here later (US-2.5)
+		return nil
+	case corev1.PodSucceeded:
+		task.Status.Phase = executionv1alpha1.AgentTaskPhaseSucceeded
+		now := metav1.Now()
+		task.Status.CompletionTime = &now
+		return r.Status().Update(ctx, task)
+	case corev1.PodFailed:
+		return r.handlePodFailure(ctx, task, pod)
+	}
+	return nil
+}
+
+func (r *AgentTaskReconciler) handlePodFailure(ctx context.Context, task *executionv1alpha1.AgentTask, pod *corev1.Pod) error {
+	task.Status.Phase = executionv1alpha1.AgentTaskPhaseFailed
+	now := metav1.Now()
+	task.Status.CompletionTime = &now
+
+	// Extract failure reason
+	task.Status.Reason = "PodFailed"
+	task.Status.Message = "The execution pod failed."
+
+	// Try to get exit code
+	for _, status := range pod.Status.ContainerStatuses {
+		if status.Name == "task" && status.State.Terminated != nil {
+			task.Status.ExitCode = status.State.Terminated.ExitCode
+			if status.State.Terminated.Message != "" {
+				task.Status.Message = status.State.Terminated.Message
+			}
+			task.Status.Reason = status.State.Terminated.Reason
+			break
+		}
+	}
+
+	return r.Status().Update(ctx, task)
+}
+
+func (r *AgentTaskReconciler) updatePhaseFailure(ctx context.Context, task *executionv1alpha1.AgentTask, reason, message string) error {
+	task.Status.Phase = executionv1alpha1.AgentTaskPhaseFailed
+	task.Status.Reason = reason
+	task.Status.Message = message
+	now := metav1.Now()
+	task.Status.CompletionTime = &now
+	return r.Status().Update(ctx, task)
 }
 
 func (r *AgentTaskReconciler) resolveImage(profile string) string {

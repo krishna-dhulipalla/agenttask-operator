@@ -45,13 +45,19 @@ var _ = Describe("AgentTask Controller", func() {
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind AgentTask")
 			err := k8sClient.Get(ctx, typeNamespacedName, agenttask)
+			Expect(err).NotTo(HaveOccurred(), "unexpected error getting AgentTask")
 			if err != nil && errors.IsNotFound(err) {
 				resource := &executionv1alpha1.AgentTask{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: executionv1alpha1.AgentTaskSpec{
+						RuntimeProfile: "python3.11",
+						Code: executionv1alpha1.CodeSource{
+							Source: "print('hello')",
+						},
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
@@ -61,6 +67,9 @@ var _ = Describe("AgentTask Controller", func() {
 			// TODO(user): Cleanup logic after each test, like removing the resource instance.
 			resource := &executionv1alpha1.AgentTask{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
+			if errors.IsNotFound(err) {
+				return
+			}
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Cleanup the specific resource instance AgentTask")
