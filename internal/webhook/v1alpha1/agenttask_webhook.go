@@ -22,6 +22,7 @@ import (
 	"slices"
 
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
@@ -35,7 +36,7 @@ var agenttasklog = logf.Log.WithName("agenttask-resource")
 // SetupAgentTaskWebhookWithManager registers the webhook for AgentTask in the manager.
 func SetupAgentTaskWebhookWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewWebhookManagedBy(mgr, &executionv1alpha1.AgentTask{}).
-		WithValidator(&AgentTaskCustomValidator{}).
+		WithValidator(&AgentTaskCustomValidator{Client: mgr.GetClient()}).
 		Complete()
 }
 
@@ -51,14 +52,44 @@ func SetupAgentTaskWebhookWithManager(mgr ctrl.Manager) error {
 // NOTE: The +kubebuilder:object:generate=false marker prevents controller-gen from generating DeepCopy methods,
 // as this struct is used only for temporary operations and does not need to be deeply copied.
 type AgentTaskCustomValidator struct {
-	// TODO(user): Add more fields as needed for validation
+	Client client.Client
 }
 
 // ValidateCreate implements webhook.CustomValidator so a webhook will be registered for the type AgentTask.
 func (v *AgentTaskCustomValidator) ValidateCreate(ctx context.Context, obj *executionv1alpha1.AgentTask) (admission.Warnings, error) {
 	agenttasklog.Info("Validation for AgentTask upon creation", "name", obj.GetName())
 
-	return nil, validateAgentTask(obj)
+	// 1. Static Validation
+	if err := validateAgentTask(obj); err != nil {
+		return nil, err
+	}
+
+	// 2. Concurrency Limit Check (US-6.2)
+	// Ignore if coming from DryRun
+	// We'll list all tasks in the same namespace
+	taskList := &executionv1alpha1.AgentTaskList{}
+	if err := v.Client.List(ctx, taskList, client.InNamespace(obj.Namespace)); err != nil {
+		return nil, fmt.Errorf("failed to list tasks for concurrency check: %w", err)
+	}
+
+	activeCount := 0
+	const MaxActiveTasks = 5
+
+	for _, task := range taskList.Items {
+		// Count tasks that are NOT in a terminal state
+		if task.Status.Phase != executionv1alpha1.AgentTaskPhaseSucceeded &&
+			task.Status.Phase != executionv1alpha1.AgentTaskPhaseFailed &&
+			task.Status.Phase != executionv1alpha1.AgentTaskPhaseTimeout &&
+			task.Status.Phase != executionv1alpha1.AgentTaskPhaseCanceled {
+			activeCount++
+		}
+	}
+
+	if activeCount >= MaxActiveTasks {
+		return nil, fmt.Errorf("too many active tasks in namespace %s (max %d)", obj.Namespace, MaxActiveTasks)
+	}
+
+	return nil, nil
 }
 
 // ValidateUpdate implements webhook.CustomValidator so a webhook will be registered for the type AgentTask.

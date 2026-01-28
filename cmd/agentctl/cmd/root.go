@@ -30,8 +30,9 @@ import (
 )
 
 var (
-	scheme    = runtime.NewScheme()
-	k8sClient client.Client
+	scheme       = runtime.NewScheme()
+	k8sClient    client.Client
+	rootNamespace string
 )
 
 func init() {
@@ -70,5 +71,5 @@ func Execute() {
 }
 
 func init() {
-	rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	rootCmd.PersistentFlags().StringVarP(&rootNamespace, "namespace", "n", "default", "Kubernetes namespace")
 }

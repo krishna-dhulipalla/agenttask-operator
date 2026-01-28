@@ -36,7 +36,7 @@ var deleteCmd = &cobra.Command{
 		// We need to fetch it first to get ResourceVersion for deletion?
 		// Actually client.Delete only needs ObjectMeta with Name/Namespace for basic delete
 		task.Name = name
-		task.Namespace = "default"
+		task.Namespace = rootNamespace
 
 		err := k8sClient.Delete(context.Background(), task)
 		if err != nil {

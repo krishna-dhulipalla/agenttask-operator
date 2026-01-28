@@ -25,6 +25,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/util/duration"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	executionv1alpha1 "agenttask.io/operator/api/v1alpha1"
 )
@@ -35,7 +36,7 @@ var listCmd = &cobra.Command{
 	Short: "List all AgentTasks",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		taskList := &executionv1alpha1.AgentTaskList{}
-		err := k8sClient.List(context.Background(), taskList) // default namespace
+		err := k8sClient.List(context.Background(), taskList, client.InNamespace(rootNamespace))
 		if err != nil {
 			return err
 		}

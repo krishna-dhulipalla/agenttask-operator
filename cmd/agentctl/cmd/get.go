@@ -35,7 +35,7 @@ var getCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
 		task := &executionv1alpha1.AgentTask{}
-		err := k8sClient.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "default"}, task)
+		err := k8sClient.Get(context.Background(), types.NamespacedName{Name: name, Namespace: rootNamespace}, task)
 		if err != nil {
 			return err
 		}

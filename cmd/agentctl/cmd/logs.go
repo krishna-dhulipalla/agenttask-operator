@@ -42,7 +42,7 @@ var logsCmd = &cobra.Command{
 
 		// 1. Get Task
 		task := &executionv1alpha1.AgentTask{}
-		err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: "default"}, task)
+		err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: rootNamespace}, task)
 		if err != nil {
 			return fmt.Errorf("failed to get task: %w", err)
 		}

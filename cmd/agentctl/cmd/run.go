@@ -32,6 +32,8 @@ import (
 var (
 	runImage   string
 	runTimeout int32
+	runTenant  string
+	runBackend string
 )
 
 // runCmd represents the run command
@@ -60,11 +62,13 @@ Example: agentctl run my_script.py`,
 		task := &executionv1alpha1.AgentTask{
 			ObjectMeta: metav1.ObjectMeta{
 				GenerateName: name + "-",
-				Namespace:    "default", // TODO: configurable namespace
+				Namespace:    rootNamespace,
 			},
 			Spec: executionv1alpha1.AgentTaskSpec{
-				RuntimeProfile: runImage, // re-using this field name, but mapped to image logic
+				RuntimeProfile: runImage,
 				TimeoutSeconds: runTimeout,
+				Tenant:         runTenant,
+				Backend:        runBackend,
 				Code: executionv1alpha1.CodeSource{
 					Source: string(content),
 				},
@@ -87,4 +91,6 @@ func init() {
 
 	runCmd.Flags().StringVar(&runImage, "profile", "python3.11", "Runtime profile to use")
 	runCmd.Flags().Int32Var(&runTimeout, "timeout", 60, "Timeout in seconds")
+	runCmd.Flags().StringVar(&runTenant, "tenant", "", "Tenant identifier")
+	runCmd.Flags().StringVar(&runBackend, "backend", "", "Execution backend (auto, pod, sandbox)")
 }

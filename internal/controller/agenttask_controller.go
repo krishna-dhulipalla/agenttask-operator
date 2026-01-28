@@ -25,7 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -46,6 +46,7 @@ type AgentTaskReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -133,14 +134,77 @@ func (r *AgentTaskReconciler) reconcilePending(ctx context.Context, task *execut
 		return err
 	}
 
-	// 3. Ensure Pod
+	// 3. Select Backend (US-3.1)
+	backend, err := r.selectBackend(ctx, task)
+	if err != nil {
+		return r.updatePhaseFailure(ctx, task, "BackendSelectionFailed", err.Error())
+	}
+
+	// 4. Dispatch
+	if backend == "sandbox" {
+		// US-3.2: Implement ensureSandbox(ctx, task, cmName)
+		// For now, fail if sandbox is selected but not implemented
+		return r.updatePhaseFailure(ctx, task, "NotImplemented", "Sandbox backend is available but not yet implemented.")
+	} 
+	
+	// Default to Pod
 	if err := r.ensurePod(ctx, task, cmName); err != nil {
 		return err
 	}
 
-	// 4. Update Status
+	// 5. Update Status
 	task.Status.Phase = executionv1alpha1.AgentTaskPhaseScheduled
 	return r.Status().Update(ctx, task)
+}
+
+func (r *AgentTaskReconciler) selectBackend(ctx context.Context, task *executionv1alpha1.AgentTask) (string, error) {
+	requested := task.Spec.Backend
+	if requested == "" {
+		requested = "auto"
+	}
+
+	sandboxAvailable, err := r.checkSandboxAvailability(ctx)
+	if err != nil {
+		// Log warning but don't fail, assume false
+		// logf.FromContext(ctx).Error(err, "Failed to check sandbox availability")
+	}
+
+	if requested == "sandbox" {
+		if !sandboxAvailable {
+			return "", errors.NewBadRequest("sandbox backend requested but not available")
+		}
+		return "sandbox", nil
+	}
+
+	if requested == "auto" {
+		if sandboxAvailable {
+			return "sandbox", nil
+		}
+		return "pod", nil
+	}
+
+	return "pod", nil
+}
+
+func (r *AgentTaskReconciler) checkSandboxAvailability(ctx context.Context) (bool, error) {
+	// Check if the Sandbox CRD exists
+	// We assume a hypothetical CRD name "sandboxes.execution.agenttask.io" for now
+	crdName := "sandboxes.execution.agenttask.io" 
+	crd := &metav1.PartialObjectMetadata{}
+	crd.SetGroupVersionKind(ptr.To(types.GroupVersionKind{
+		Group:   "apiextensions.k8s.io",
+		Version: "v1",
+		Kind:    "CustomResourceDefinition",
+	}))
+	
+	err := r.Get(ctx, types.NamespacedName{Name: crdName}, crd)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 func (r *AgentTaskReconciler) ensureCodeConfigMap(ctx context.Context, task *executionv1alpha1.AgentTask) (string, error) {
@@ -227,13 +291,18 @@ func (r *AgentTaskReconciler) ensurePod(ctx context.Context, task *executionv1al
 		var allowPrivilegeEscalation bool = false
 		var readOnlyRootFilesystem bool = true
 
+		labels := map[string]string{
+			"agenttask.io/task": task.Name,
+		}
+		if task.Spec.Tenant != "" {
+			labels["agenttask.io/tenant"] = task.Spec.Tenant
+		}
+
 		pod = &corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      podName,
 				Namespace: task.Namespace,
-				Labels: map[string]string{
-					"agenttask.io/task": task.Name,
-				},
+				Labels:    labels,
 				OwnerReferences: []metav1.OwnerReference{
 					*metav1.NewControllerRef(task, executionv1alpha1.GroupVersion.WithKind("AgentTask")),
 				},
