@@ -29,6 +29,7 @@ rules:
   - execution.agenttask.io
   resources:
   - agenttasks
+  - sandboxes
   verbs:
   - create
   - delete
