@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -27,6 +28,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/utils/ptr"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -142,19 +145,28 @@ func (r *AgentTaskReconciler) reconcilePending(ctx context.Context, task *execut
 	if err != nil {
 		return r.updatePhaseFailure(ctx, task, "BackendSelectionFailed", err.Error())
 	}
+	
+	// Resolve Image (US-3.3)
+	// We need to resolve the image differently for Pod vs Sandbox?
+	// Actually, let's assume the ConfigMap has keys like "python3.11" (Pod) and "python3.11-sandbox" (Sandbox) OR
+	// we just use a single resolve function that returns the right image based on backend.
+	image, err := r.resolveRuntimeProfile(ctx, task.Spec.RuntimeProfile, backend, task.Namespace)
+	if err != nil {
+		return r.updatePhaseFailure(ctx, task, "ProfileResolutionFailed", err.Error())
+	}
 
 	// 4. Dispatch
 	if backend == "sandbox" {
 		// US-3.2: Creation
 		sbManager := &sandbox.Manager{Client: r.Client}
-		objRef, err := sbManager.EnsureSandbox(ctx, task, cmName)
+		objRef, err := sbManager.EnsureSandbox(ctx, task, cmName, image)
 		if err != nil {
 			return err
 		}
 		task.Status.PodRef = *objRef
 	} else {
 		// Default to Pod
-		if err := r.ensurePod(ctx, task, cmName); err != nil {
+		if err := r.ensurePod(ctx, task, cmName, image); err != nil {
 			return err
 		}
 	}
@@ -285,13 +297,11 @@ func (r *AgentTaskReconciler) ensureNetworkPolicy(ctx context.Context, task *exe
 	return nil
 }
 
-func (r *AgentTaskReconciler) ensurePod(ctx context.Context, task *executionv1alpha1.AgentTask, cmName string) error {
+func (r *AgentTaskReconciler) ensurePod(ctx context.Context, task *executionv1alpha1.AgentTask, cmName string, image string) error {
 	podName := task.Name + "-pod"
 	pod := &corev1.Pod{}
 	err := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: task.Namespace}, pod)
 	if err != nil && errors.IsNotFound(err) {
-		image := r.resolveImage(task.Spec.RuntimeProfile)
-
 		// Prepare Security Contexts
 		var runAsNonRoot bool = true
 		var runAsUser int64 = 1000
@@ -578,13 +588,35 @@ func (r *AgentTaskReconciler) reconcileTimeout(ctx context.Context, task *execut
 	return ctrl.Result{}, nil
 }
 
-func (r *AgentTaskReconciler) resolveImage(profile string) string {
-	// Simple mapping for MVP
+func (r *AgentTaskReconciler) resolveRuntimeProfile(ctx context.Context, profile string, backend string, namespace string) (string, error) {
+	// 1. Try ConfigMap
+	cm := &corev1.ConfigMap{}
+	// We look for the ConfigMap in the same namespace as the task (for now) or a specific system namespace.
+	// For MVP, let's look in the task's namespace to allow user overrides, 
+	// OR (better) look in the operator's namespace... but we don't know it easily.
+	// Let's assume it's in the SAME namespace as the Task for simplicity of testing.
+	err := r.Get(ctx, types.NamespacedName{Name: "agenttask-runtime-profiles", Namespace: namespace}, cm)
+	if err == nil {
+		// ConfigMap exists
+		key := profile
+		if backend == "sandbox" {
+			key = profile + "-sandbox"
+		}
+		
+		if val, ok := cm.Data[key]; ok {
+			return val, nil
+		}
+	}
+
+	// 2. Fallback to Hardcoded Defaults
 	switch profile {
 	case "python3.11", "python3.10":
-		return "python:3.11-slim"
+		if backend == "sandbox" {
+			return "agent-sandbox-python:3.11", nil
+		}
+		return "python:3.11-slim", nil
 	default:
-		return "python:3.11-slim"
+		return "", fmt.Errorf("unknown runtime profile: %s", profile)
 	}
 }
 

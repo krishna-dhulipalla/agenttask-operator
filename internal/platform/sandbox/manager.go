@@ -25,7 +25,7 @@ type Manager struct {
 	Client client.Client
 }
 
-func (m *Manager) EnsureSandbox(ctx context.Context, task *executionv1alpha1.AgentTask, cmName string) (*corev1.ObjectReference, error) {
+func (m *Manager) EnsureSandbox(ctx context.Context, task *executionv1alpha1.AgentTask, cmName string, image string) (*corev1.ObjectReference, error) {
 	sandboxName := task.Name + "-sandbox"
 	
 	// Check if exists
@@ -53,7 +53,7 @@ func (m *Manager) EnsureSandbox(ctx context.Context, task *executionv1alpha1.Age
 	// Construct Spec
 	// This mirrors the structure of the Mock CRD we created
 	sandbox.Object["spec"] = map[string]interface{}{
-		"image": resolveSandboxImage(task.Spec.RuntimeProfile),
+		"image": image,
 		"command": []string{"python", "/workspace/entrypoint.py"},
 		// We would map volumes/mounts here if the Sandbox API supports it
 		// For MVP mock, we just set image/command
@@ -75,7 +75,4 @@ func (m *Manager) EnsureSandbox(ctx context.Context, task *executionv1alpha1.Age
 	}, nil
 }
 
-func resolveSandboxImage(profile string) string {
-	// Simple mapping
-	return "agent-sandbox-python:3.11"
-}
+
