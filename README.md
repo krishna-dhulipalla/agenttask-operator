@@ -1,4 +1,10 @@
+<<<<<<< HEAD
 # AgentTask: Production-Grade AI Agent Runtime for Kubernetes
+=======
+# AgentTask: Production K8s Sandbox for AI Agents
+
+**Production-Grade AI Agent Execution on Kubernetes**
+>>>>>>> 467a1c8b733513ce7ae517f00dcf32a4d1daf3ea
 
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
 ![Status](https://img.shields.io/badge/status-beta-orange.svg)
