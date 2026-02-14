@@ -128,10 +128,10 @@ const (
 type AgentTaskReason string
 
 const (
-	AgentTaskReasonPodFailed              AgentTaskReason = "PodFailed"
-	AgentTaskReasonTimeout                AgentTaskReason = "Timeout"
-	AgentTaskReasonCanceled               AgentTaskReason = "Canceled"
-	AgentTaskReasonPodMissing             AgentTaskReason = "PodMissing"
+	AgentTaskReasonPodFailed               AgentTaskReason = "PodFailed"
+	AgentTaskReasonTimeout                 AgentTaskReason = "Timeout"
+	AgentTaskReasonCanceled                AgentTaskReason = "Canceled"
+	AgentTaskReasonPodMissing              AgentTaskReason = "PodMissing"
 	AgentTaskReasonImagePullFailed        AgentTaskReason = "ImagePullFailed"
 	AgentTaskReasonProfileResolutionFailed AgentTaskReason = "ProfileResolutionFailed"
 	AgentTaskReasonBackendSelectionFailed AgentTaskReason = "BackendSelectionFailed"

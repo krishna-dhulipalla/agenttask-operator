@@ -42,20 +42,20 @@ var listCmd = &cobra.Command{
 		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(w, "NAME\tPHASE\tREASON\tAGE\tPOD")
+		_, _ = fmt.Fprintln(w, "NAME\tPHASE\tREASON\tAGE\tPOD")
 
 		for _, task := range taskList.Items {
 			age := "Unknown"
-			if task.CreationTimestamp.Time.IsZero() == false {
+			if !task.CreationTimestamp.Time.IsZero() {
 				age = duration.HumanDuration(time.Since(task.CreationTimestamp.Time))
 			}
 			Phase := string(task.Status.Phase)
 			if Phase == "" {
 				Phase = "Pending"
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", task.Name, Phase, task.Status.Reason, age, task.Status.PodRef.Name)
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", task.Name, Phase, task.Status.Reason, age, task.Status.PodRef.Name)
 		}
-		w.Flush()
+		return w.Flush()
 		return nil
 	},
 }

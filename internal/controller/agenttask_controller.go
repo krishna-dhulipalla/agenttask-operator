@@ -377,10 +377,10 @@ func (r *AgentTaskReconciler) ensurePod(ctx context.Context, task *executionv1al
 	err := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: task.Namespace}, pod)
 	if err != nil && errors.IsNotFound(err) {
 		// Prepare Security Contexts
-		var runAsNonRoot bool = true
+			runAsNonRoot := true
 		var runAsUser int64 = 1000
-		var allowPrivilegeEscalation bool = false
-		var readOnlyRootFilesystem bool = true
+		allowPrivilegeEscalation := false
+		readOnlyRootFilesystem := true
 
 		labels := map[string]string{
 			"agenttask.io/task": task.Name,

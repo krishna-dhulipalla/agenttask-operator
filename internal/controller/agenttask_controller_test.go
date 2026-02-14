@@ -45,7 +45,6 @@ var _ = Describe("AgentTask Controller", func() {
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind AgentTask")
 			err := k8sClient.Get(ctx, typeNamespacedName, agenttask)
-			Expect(err).NotTo(HaveOccurred(), "unexpected error getting AgentTask")
 			if err != nil && errors.IsNotFound(err) {
 				resource := &executionv1alpha1.AgentTask{
 					ObjectMeta: metav1.ObjectMeta{
@@ -60,6 +59,8 @@ var _ = Describe("AgentTask Controller", func() {
 					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+			} else if err != nil {
+				Expect(err).NotTo(HaveOccurred())
 			}
 		})
 

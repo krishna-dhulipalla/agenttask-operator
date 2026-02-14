@@ -3,7 +3,6 @@ package sandbox
 import (
 	"context"
 	"fmt"
-	
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -52,7 +51,7 @@ func (m *Manager) EnsureSandbox(ctx context.Context, task *executionv1alpha1.Age
 	
 	// Construct Spec
 	// This mirrors the structure of the Mock CRD we created
-	sandbox.Object["spec"] = map[string]interface{}{
+	sandbox.Object["spec"] = map[string]any{
 		"image": image,
 		"command": []string{"python", "/workspace/entrypoint.py"},
 		// We would map volumes/mounts here if the Sandbox API supports it
