@@ -32,6 +32,7 @@ import (
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
@@ -102,8 +103,8 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// Check if the object is being deleted
 	if agentTask.ObjectMeta.DeletionTimestamp.IsZero() {
 		// Not being deleted, add finalizer if missing
-		if !ctrl.ContainsFinalizer(agentTask, agentTaskFinalizer) {
-			ctrl.AddFinalizer(agentTask, agentTaskFinalizer)
+		if !controllerutil.ContainsFinalizer(agentTask, agentTaskFinalizer) {
+			controllerutil.AddFinalizer(agentTask, agentTaskFinalizer)
 			if err := r.Update(ctx, agentTask); err != nil {
 				return ctrl.Result{}, err
 			}
@@ -111,14 +112,14 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		}
 	} else {
 		// Being deleted
-		if ctrl.ContainsFinalizer(agentTask, agentTaskFinalizer) {
+		if controllerutil.ContainsFinalizer(agentTask, agentTaskFinalizer) {
 			// Run finalization logic
 			if err := r.finalizeAgentTask(ctx, agentTask); err != nil {
 				return ctrl.Result{}, err
 			}
 
 			// Remove finalizer
-			ctrl.RemoveFinalizer(agentTask, agentTaskFinalizer)
+			controllerutil.RemoveFinalizer(agentTask, agentTaskFinalizer)
 			if err := r.Update(ctx, agentTask); err != nil {
 				return ctrl.Result{}, err
 			}
