@@ -30,8 +30,8 @@ import (
 )
 
 var (
-	scheme       = runtime.NewScheme()
-	k8sClient    client.Client
+	scheme        = runtime.NewScheme()
+	k8sClient     client.Client
 	rootNamespace string
 )
 

@@ -64,7 +64,7 @@ var describeCmd = &cobra.Command{
 		if task.Status.CompletionTime != nil {
 			_, _ = fmt.Fprintf(w, "  Completion Time:\t%s\n", task.Status.CompletionTime.Format(time.RFC3339))
 			if task.Status.StartTime != nil {
-				d := task.Status.CompletionTime.Time.Sub(task.Status.StartTime.Time)
+				d := task.Status.CompletionTime.Sub(task.Status.StartTime.Time)
 				_, _ = fmt.Fprintf(w, "  Duration:\t%s\n", duration.HumanDuration(d))
 			}
 		}
